@@ -1,0 +1,10 @@
+[Interface]
+PrivateKey = {{ current_peer_priv_key }}
+Address = {{ peer.ip }}
+DNS = 1.1.1.1, 8.8.8.8
+
+[Peer]
+PublicKey = {{ server_public_key }}
+Endpoint = {{ inventory_hostname }}:{{ wireguard_port }}
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25

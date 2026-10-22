@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""
+WireGuard Telemetry Sync Agent
+Reads WireGuard peer transfer and handshake statistics, maintains persistent
+baseline counters across interface restarts/reboots, and sends bulk metrics
+to the Control Plane backend.
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+
+SERVER_ID = "{{ server_id | default('') }}"
+API_URL = "{{ control_plane_api_url | default('http://<CONTROL_PLANE_IP>') }}/api/v1/telemetry/wg"
+TELEMETRY_KEY = "{{ telemetry_api_key | default('') }}"
+STATE_DIR = "/var/lib/wg_telemetry"
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+WG_INTERFACE = "{{ wireguard_interface | default('wg0') }}"
+
+
+def load_state() -> dict:
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_state(state: dict):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp_file = STATE_FILE + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp_file, STATE_FILE)
+
+
+def run_cmd(cmd: list) -> str:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return res.stdout
+    except Exception as e:
+        print(f"[wg_telemetry] Error running {' '.join(cmd)}: {e}", file=sys.stderr)
+        return ""
+
+
+def main():
+    transfer_out = run_cmd(["wg", "show", WG_INTERFACE, "transfer"])
+    handshake_out = run_cmd(["wg", "show", WG_INTERFACE, "latest-handshakes"])
+
+    if not transfer_out and not handshake_out:
+        print(f"[wg_telemetry] No WireGuard output for interface {WG_INTERFACE}")
+        return
+
+    transfers = {}
+    for line in transfer_out.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            pubkey = parts[0]
+            try:
+                rx = int(parts[1])
+                tx = int(parts[2])
+                transfers[pubkey] = (rx, tx)
+            except ValueError:
+                continue
+
+    handshakes = {}
+    for line in handshake_out.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            pubkey = parts[0]
+            try:
+                hs = int(parts[1])
+                handshakes[pubkey] = hs
+            except ValueError:
+                continue
+
+    state = load_state()
+    # state format: { "peers": { "<pubkey>": { "last_raw_rx": int, "last_raw_tx": int, "accum_rx": int, "accum_tx": int } } }
+    peers_state = state.get("peers", {})
+
+    payload_peers = []
+
+    for pubkey, (raw_rx, raw_tx) in transfers.items():
+        peer_prev = peers_state.get(pubkey, {"last_raw_rx": 0, "last_raw_tx": 0, "accum_rx": 0, "accum_tx": 0})
+        
+        last_raw_rx = peer_prev.get("last_raw_rx", 0)
+        last_raw_tx = peer_prev.get("last_raw_tx", 0)
+        accum_rx = peer_prev.get("accum_rx", 0)
+        accum_tx = peer_prev.get("accum_tx", 0)
+
+        # Detect reboot or counter reset (raw counter dropped)
+        if raw_rx < last_raw_rx:
+            # WireGuard restarted: add last known raw counter to accumulated baseline
+            accum_rx += last_raw_rx
+        if raw_tx < last_raw_tx:
+            accum_tx += last_raw_tx
+
+        total_rx = accum_rx + raw_rx
+        total_tx = accum_tx + raw_tx
+
+        peers_state[pubkey] = {
+            "last_raw_rx": raw_rx,
+            "last_raw_tx": raw_tx,
+            "accum_rx": accum_rx,
+            "accum_tx": accum_tx
+        }
+
+        payload_peers.append({
+            "public_key": pubkey,
+            "bytes_rx": total_rx,
+            "bytes_tx": total_tx,
+            "latest_handshake": handshakes.get(pubkey, 0)
+        })
+
+    state["peers"] = peers_state
+    save_state(state)
+
+    if not payload_peers:
+        return
+
+    payload = {
+        "server_id": SERVER_ID if (SERVER_ID and SERVER_ID.strip()) else None,
+        "peers": payload_peers
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(API_URL, data=data, headers={
+        "Content-Type": "application/json",
+        "X-Telemetry-Key": TELEMETRY_KEY
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[wg_telemetry] Successfully synced {len(payload_peers)} peers. Response: {resp.status}")
+    except Exception as e:
+        print(f"[wg_telemetry] Failed to push telemetry to {API_URL}: {e}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

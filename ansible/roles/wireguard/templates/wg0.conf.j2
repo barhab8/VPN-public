@@ -1,0 +1,15 @@
+[Interface]
+Address = {{ wireguard_network }}
+ListenPort = {{ wireguard_port }}
+PrivateKey = {{ server_private_key }}
+
+# NAT routing — append so Docker's DOCKER-FORWARD chain (conntrack for return traffic) is evaluated first
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+{% for peer in final_peers %}
+[Peer]
+# Name: {{ peer.name }}
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.ip }}
+{% endfor %}

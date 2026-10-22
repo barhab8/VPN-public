@@ -1,0 +1,61 @@
+---
+- name: Ensure wireguard_exporter group exists
+  ansible.builtin.group:
+    name: wireguard_exporter
+    state: present
+    system: true
+
+- name: Ensure wireguard_exporter user exists
+  ansible.builtin.user:
+    name: wireguard_exporter
+    group: wireguard_exporter
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+
+- name: Check if prometheus_wireguard_exporter is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/prometheus_wireguard_exporter
+  register: wg_exporter_bin
+
+- name: Download and install prometheus_wireguard_exporter binary
+  ansible.builtin.get_url:
+    url: "https://github.com/MindFlavor/prometheus_wireguard_exporter/releases/download/3.6.6/prometheus_wireguard_exporter"
+    dest: /usr/local/bin/prometheus_wireguard_exporter
+    mode: '0755'
+    owner: root
+    group: root
+  when: not wg_exporter_bin.stat.exists
+
+- name: Set capabilities on prometheus_wireguard_exporter to inspect WireGuard interfaces without root
+  community.general.capabilities:
+    path: /usr/local/bin/prometheus_wireguard_exporter
+    capability: cap_net_admin+ep
+    state: present
+  ignore_errors: true
+
+- name: Deploy prometheus_wireguard_exporter systemd unit
+  ansible.builtin.template:
+    src: wireguard_exporter.service.j2
+    dest: /etc/systemd/system/prometheus_wireguard_exporter.service
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart wireguard_exporter
+
+- name: Allow WireGuard exporter port 9586 strictly from Control Plane IP
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "9586"
+    source: "{{ control_plane_ip }}"
+    jump: ACCEPT
+    comment: "Allow Prometheus WireGuard scrape from Control Plane"
+  when: control_plane_ip is defined
+
+- name: Ensure prometheus_wireguard_exporter service is enabled and running
+  ansible.builtin.systemd:
+    name: prometheus_wireguard_exporter
+    state: started
+    enabled: true
+    daemon_reload: true

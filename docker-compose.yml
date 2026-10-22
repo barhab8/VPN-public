@@ -1,0 +1,48 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CONTROL_PLANE_SITE: ${CONTROL_PLANE_SITE:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app_default
+
+
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.size=5GB"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_targets:/etc/prometheus/targets:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - app_default
+
+volumes:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  prometheus_targets:
+    name: app_prometheus_targets
+
+networks:
+  app_default:
+    name: app_default
+    driver: bridge
+
+

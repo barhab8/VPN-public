@@ -1,0 +1,39 @@
+---
+- name: Ensure WireGuard state directory exists
+  ansible.builtin.file:
+    path: /var/lib/wg_telemetry
+    state: directory
+    mode: '0750'
+    owner: root
+    group: root
+
+- name: Deploy wg_telemetry.py script
+  ansible.builtin.template:
+    src: wg_telemetry.py.j2
+    dest: /usr/local/bin/wg_telemetry.py
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Deploy wg_telemetry systemd service
+  ansible.builtin.template:
+    src: wg_telemetry.service.j2
+    dest: /etc/systemd/system/wg_telemetry.service
+    mode: '0644'
+  notify: Reload systemd
+
+- name: Deploy wg_telemetry systemd timer
+  ansible.builtin.template:
+    src: wg_telemetry.timer.j2
+    dest: /etc/systemd/system/wg_telemetry.timer
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart wg_telemetry_timer
+
+- name: Ensure wg_telemetry timer is active and enabled
+  ansible.builtin.systemd:
+    name: wg_telemetry.timer
+    state: started
+    enabled: true
+    daemon_reload: true

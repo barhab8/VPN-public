@@ -1,0 +1,41 @@
+---
+# add_peer.yml - Add a single WireGuard peer to a running server
+# Called by the Task Worker with extra vars:
+#   -e client_public_key=<base64 key>
+#   -e assigned_ip=<IP address, e.g. 10.8.0.2>
+#
+# Usage:
+#   ansible-playbook add_peer.yml -i <server_ip>, -u ubuntu \
+#     -e client_public_key=<key> -e assigned_ip=<ip>
+
+- name: Add WireGuard peer to server
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - client_public_key is defined
+          - assigned_ip is defined
+        fail_msg: "Both 'client_public_key' and 'assigned_ip' must be provided as extra vars."
+
+    - name: Check if WireGuard interface wg0 is up
+      command: wg show wg0
+      register: wg_status
+      changed_when: false
+
+    - name: Add peer to running WireGuard interface
+      command: >
+        wg set wg0 peer {{ client_public_key }}
+        allowed-ips {{ assigned_ip }}/32
+
+    - name: Persist running WireGuard config to disk
+      command: wg-quick save wg0
+
+    - name: Verify peer was added
+      shell: wg show wg0 | grep "{{ client_public_key }}"
+      register: verify_peer
+      changed_when: false
+      failed_when: verify_peer.rc != 0

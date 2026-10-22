@@ -1,0 +1,46 @@
+---
+# sync_dns_rules.yml
+# Syncs the active DNS rule set from the Control Plane database to Blocky on
+# the target gateway(s).
+#
+# Variables injected as extra-vars by the Task Worker:
+#   blacklist_domains  – Python list of plain domain strings to block
+#   whitelist_domains  – Python list of plain domain strings to allow
+#
+# Steps:
+#   1. Write custom_blacklist.txt (one domain per line)
+#   2. Write custom_whitelist.txt (one domain per line)
+#   3. POST /api/lists/refresh to Blocky's loopback REST port (no auth required)
+#
+# Idempotent: writing the same file content multiple times produces identical
+# state. The refresh call is always safe to repeat.
+
+- name: Sync DNS rules to Blocky
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Ensure Blocky rules directory exists
+      ansible.builtin.file:
+        path: /opt/blocky/rules
+        state: directory
+        mode: '0755'
+
+    - name: Write custom blacklist domains to file
+      ansible.builtin.copy:
+        content: "{{ blacklist_domains | join('\n') }}\n"
+        dest: /opt/blocky/rules/custom_blacklist.txt
+        mode: '0644'
+
+    - name: Write custom whitelist domains to file
+      ansible.builtin.copy:
+        content: "{{ whitelist_domains | join('\n') }}\n"
+        dest: /opt/blocky/rules/custom_whitelist.txt
+        mode: '0644'
+
+    - name: Trigger Blocky to reload its filter lists
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:4000/api/lists/refresh"
+        method: POST
+        status_code: 200

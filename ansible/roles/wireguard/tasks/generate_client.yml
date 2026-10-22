@@ -1,0 +1,25 @@
+---
+- name: Check if peer private key exists
+  stat:
+    path: "/etc/wireguard/{{ peer.name }}_privatekey"
+  register: peer_priv_key_file
+
+- name: Fetch peer private key
+  slurp:
+    src: "/etc/wireguard/{{ peer.name }}_privatekey"
+  register: peer_priv_key_slurp
+  when: peer_priv_key_file.stat.exists
+
+- name: Set peer private key fact
+  set_fact:
+    current_peer_priv_key: "{{ peer_priv_key_slurp['content'] | b64decode | trim }}"
+  when: peer_priv_key_file.stat.exists
+
+- name: Template client config on local machine
+  template:
+    src: client.conf.j2
+    dest: "{{ playbook_dir }}/../{{ peer.name }}.conf"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: peer_priv_key_file.stat.exists

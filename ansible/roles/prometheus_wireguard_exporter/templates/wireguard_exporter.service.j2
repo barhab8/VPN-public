@@ -1,0 +1,15 @@
+[Unit]
+Description=Prometheus WireGuard Exporter
+Documentation=https://github.com/MindFlavor/prometheus_wireguard_exporter
+After=network-online.target wireguard.service
+Wants=network-online.target
+
+[Service]
+User=root
+Type=simple
+ExecStart=/usr/local/bin/prometheus_wireguard_exporter -p 9586 -n 60 -a true
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

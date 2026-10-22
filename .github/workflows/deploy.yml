@@ -1,0 +1,121 @@
+name: Infra CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - 'terraform/foundation/**'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - 'prometheus.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - 'terraform/foundation/**'
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Setup SSH Public Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_PUB_KEY }}" > ~/.ssh/id_rsa.pub
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform/foundation
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+      - name: Terraform Plan
+        run: terraform plan
+        working-directory: terraform/foundation
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+  terraform-apply:
+    name: Terraform Apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Setup SSH Public Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_PUB_KEY }}" > ~/.ssh/id_rsa.pub
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform/foundation
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: terraform/foundation
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+  deploy-edge:
+    name: Deploy Edge Config
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Use if: always() if we want edge deploy to happen even if TF wasn't triggered, 
+    # but needs implies strict dependency. We'll leave it as is or remove `needs` if they are disjoint.
+    # Actually, let's decouple deploy-edge from terraform-apply if they don't depend.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy Edge Stack
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: <CONTROL_PLANE_IP>
+          username: ubuntu
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: GITHUB_TOKEN
+          script: |
+            mkdir -p ~/VPN-infra
+            cd ~/VPN-infra
+            if [ ! -d ".git" ]; then
+              git clone https://oauth2:$GITHUB_TOKEN@github.com/<YOUR_GITHUB_USER>/<YOUR_REPO_NAME>.git .
+            else
+              git pull https://oauth2:$GITHUB_TOKEN@github.com/<YOUR_GITHUB_USER>/<YOUR_REPO_NAME>.git main
+            fi
+            docker compose up -d --remove-orphans
+            # Hot reload prometheus
+            curl -X POST http://localhost:9090/-/reload || true
+            # Hot reload caddy
+            docker exec vpn-infra-caddy-1 caddy reload --config /etc/caddy/Caddyfile || true

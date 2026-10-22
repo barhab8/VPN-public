@@ -1,0 +1,41 @@
+---
+# remove_peer.yml - Remove a single WireGuard peer from a running server.
+# Called by the Task Worker with:
+#   -e client_public_key=<base64 key>
+
+- name: Remove WireGuard peer from server
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - client_public_key is defined
+        fail_msg: "'client_public_key' must be provided as an extra var."
+
+    - name: Check if WireGuard interface wg0 is up
+      command: wg show wg0
+      register: wg_status
+      changed_when: false
+
+    - name: Check if peer exists
+      shell: wg show wg0 peers | grep -Fx "{{ client_public_key }}"
+      register: existing_peer
+      changed_when: false
+      failed_when: existing_peer.rc not in [0, 1]
+
+    - name: Remove peer from running WireGuard interface
+      command: wg set wg0 peer {{ client_public_key }} remove
+      when: existing_peer.rc == 0
+
+    - name: Persist running WireGuard config to disk
+      command: wg-quick save wg0
+      when: existing_peer.rc == 0
+
+    - name: Verify peer is absent
+      shell: wg show wg0 peers | grep -Fx "{{ client_public_key }}"
+      register: verify_peer_absent
+      changed_when: false
+      failed_when: verify_peer_absent.rc == 0

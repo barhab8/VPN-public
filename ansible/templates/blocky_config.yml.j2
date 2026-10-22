@@ -1,0 +1,24 @@
+upstream:
+  default:
+    - https://1.1.1.1/dns-query
+    - https://1.0.0.1/dns-query
+
+blocking:
+  blackLists:
+    ads:
+      - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+      - /app/rules/custom_blacklist.txt
+  whiteLists:
+    ads:
+      - /app/rules/custom_whitelist.txt
+  clientGroupsBlock:
+    default:
+      - ads
+
+ports:
+  dns: 53
+  http: 4000
+
+log:
+  level: info
+  format: text

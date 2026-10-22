@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "vpn-gateways-node"
+    file_sd_configs:
+      - files:
+          - "/etc/prometheus/targets/node_targets.json"
+        refresh_interval: 30s
+
+  - job_name: "vpn-gateways-wireguard"
+    file_sd_configs:
+      - files:
+          - "/etc/prometheus/targets/wireguard_targets.json"
+        refresh_interval: 30s

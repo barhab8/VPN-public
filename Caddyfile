@@ -1,0 +1,12 @@
+{$CONTROL_PLANE_SITE} {
+    @docs path /api/v1/docs* /api/v1/redoc* /api/v1/openapi.json
+    respond @docs 404
+
+    handle /api/* {
+        reverse_proxy backend-api-1:8000
+    }
+
+    handle {
+        reverse_proxy frontend-frontend-1:80
+    }
+}

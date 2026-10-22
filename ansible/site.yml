@@ -1,0 +1,15 @@
+---
+- name: Configure WireGuard VPN Gateway
+  hosts: all
+  become: true
+  vars:
+    wireguard_port: 51820
+    wireguard_network: "10.8.0.1/24"
+    control_plane_api_url: "http://<CONTROL_PLANE_IP>"
+    peers:
+      - name: "test-peer"
+        ip: "10.8.0.2/32"
+  roles:
+    - wireguard
+    - prometheus_node_exporter
+    - wireguard_telemetry

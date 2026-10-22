@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart wg_telemetry_timer
+  ansible.builtin.systemd:
+    name: wg_telemetry.timer
+    state: restarted

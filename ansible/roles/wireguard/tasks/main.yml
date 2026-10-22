@@ -1,0 +1,186 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install WireGuard and base packages
+  apt:
+    name:
+      - wireguard
+      - wireguard-tools
+      - iptables
+      - python3-pip
+    state: present
+
+- name: Check if Docker is installed
+  command: docker --version
+  register: docker_check
+  ignore_errors: yes
+  changed_when: false
+
+- name: Install Docker if missing
+  apt:
+    name: docker.io
+    state: present
+  when: docker_check.rc != 0
+
+- name: Ensure Docker service is started and enabled
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Enable IPv4 forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: yes
+    state: present
+    reload: yes
+
+- name: Ensure /etc/wireguard directory exists
+  file:
+    path: /etc/wireguard
+    state: directory
+    mode: '0700'
+
+- name: Generate server keys
+  shell: |
+    wg genkey | tee privatekey | wg pubkey > publickey
+  args:
+    chdir: /etc/wireguard
+    creates: /etc/wireguard/privatekey
+  register: wg_keys
+
+- name: Read server private key
+  slurp:
+    src: /etc/wireguard/privatekey
+  register: server_private_key_b64
+
+- name: Read server public key
+  slurp:
+    src: /etc/wireguard/publickey
+  register: server_public_key_b64
+
+- name: Set server key facts
+  set_fact:
+    server_private_key: "{{ server_private_key_b64['content'] | b64decode | trim }}"
+    server_public_key: "{{ server_public_key_b64['content'] | b64decode | trim }}"
+
+- name: Generate keys for peers if they don't have them
+  shell: |
+    wg genkey | tee {{ item.name }}_privatekey | wg pubkey > {{ item.name }}_publickey
+  args:
+    chdir: /etc/wireguard
+    creates: "/etc/wireguard/{{ item.name }}_privatekey"
+  loop: "{{ peers }}"
+  when: item.public_key is not defined
+
+- name: Slurp generated peer public keys
+  slurp:
+    src: "/etc/wireguard/{{ item.name }}_publickey"
+  loop: "{{ peers }}"
+  when: item.public_key is not defined
+  register: generated_peer_pubkeys
+
+- name: Update peers with generated public keys
+  set_fact:
+    peers_updated: >-
+      {{ peers_updated | default([]) + [
+          item.item | combine({'public_key': (item.content | b64decode | trim)})
+      ] }}
+  loop: "{{ generated_peer_pubkeys.results }}"
+  when: item.skipped is not defined
+
+- name: Merge defined and generated peers
+  set_fact:
+    final_peers: "{{ peers_updated | default(peers) }}"
+
+- name: Template WireGuard server config
+  template:
+    src: wg0.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    mode: '0600'
+  notify:
+    - Restart WireGuard
+
+- name: Enable and start WireGuard service
+  systemd:
+    name: wg-quick@wg0
+    state: started
+    enabled: yes
+
+- name: Generate client configs locally
+  include_tasks: generate_client.yml
+  loop: "{{ final_peers }}"
+  loop_control:
+    loop_var: peer
+
+# ============================================================
+# Blocky DNS Resolver — Sprint 9
+# ============================================================
+
+- name: Ensure Blocky config directory exists
+  file:
+    path: /opt/blocky
+    state: directory
+    mode: '0755'
+
+- name: Ensure Blocky rules directory exists
+  file:
+    path: /opt/blocky/rules
+    state: directory
+    mode: '0755'
+
+- name: Template Blocky configuration file
+  template:
+    src: blocky_config.yml.j2
+    dest: /opt/blocky/config.yml
+    mode: '0644'
+
+- name: Ensure custom blacklist file exists (empty on first run)
+  ansible.builtin.copy:
+    content: ""
+    dest: /opt/blocky/rules/custom_blacklist.txt
+    force: false
+    mode: '0644'
+
+- name: Ensure custom whitelist file exists (empty on first run)
+  ansible.builtin.copy:
+    content: ""
+    dest: /opt/blocky/rules/custom_whitelist.txt
+    force: false
+    mode: '0644'
+
+- name: Pull Blocky Docker image
+  ansible.builtin.command: docker pull spx01/blocky:latest
+  changed_when: false
+
+- name: Stop and remove existing Blocky container (if any)
+  ansible.builtin.shell: |
+    docker rm -f blocky 2>/dev/null || true
+  changed_when: false
+
+- name: Run Blocky DNS container
+  ansible.builtin.command: >
+    docker run -d
+    --name blocky
+    --restart always
+    -p 10.8.0.1:53:53/tcp
+    -p 10.8.0.1:53:53/udp
+    -p 127.0.0.1:4000:4000/tcp
+    -v /opt/blocky/config.yml:/app/config.yml
+    -v /opt/blocky/rules:/app/rules
+    spx01/blocky:latest
+
+- name: Wait for Blocky REST API to become ready
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:4000/api/blocking/status"
+    method: GET
+    status_code: 200
+  register: blocky_ready
+  retries: 10
+  delay: 3
+  until: blocky_ready.status == 200
+

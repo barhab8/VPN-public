@@ -1,0 +1,9 @@
+[Unit]
+Description=WireGuard Telemetry Sync Agent
+After=network.target wireguard.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wg_telemetry.py
+StandardOutput=journal
+StandardError=journal

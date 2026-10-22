@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart wireguard_exporter
+  ansible.builtin.systemd:
+    name: prometheus_wireguard_exporter
+    state: restarted
